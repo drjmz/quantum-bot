@@ -25,11 +25,21 @@ def generate_trade_analysis(signal_type, price, slope, whale_ratio, fng, flow_st
             'gemini-pro'              # Legacy fallback
         ]
 
-        # 2. Construct the "Degen" Persona Prompt
+        # DYNAMIC PROMPT BASED ON STRATEGY
+        strategy_context = (
+            "You are a contrarian trading algorithm. "
+            "Your strategy is to BUY when sentiment is FEAR (reversal) and SELL when sentiment is GREED. "
+            "If slope is negative but sentiment is low, view this as a potential 'Long Squeeze' setup. "
+            "If slope is positive but sentiment is extreme, view this as a top."
+        )
+
         prompt = (
-            f"You are a reckless crypto degen trader. Summarize this trade in 1 short, hype-filled sentence. "
-            f"Signal: {signal_type} ETH @ ${price}. "
-            f"Techs: Slope {slope:.2f}, Whales {whale_ratio:.2f}, Sentiment {fng}, WinProb {win_prob:.0f}%."
+            f"{strategy_context}\n"
+            f"Analyze this {signal_type} signal for ETH in 1 sentence. "
+            f"Current Data: Price ${price}, Slope {slope:.2f} (Trend), "
+            f"Whale Ratio {whale_ratio:.2f} (>1.2 is bullish accumulation), "
+            f"Sentiment {fng} (0-25 is Extreme Fear/Buy Zone). "
+            f"Win Probability: {win_prob:.1f}%."
         )
 
         # 3. Iterate until one works
