@@ -2,7 +2,7 @@
 
 A high-frequency trading system comprising two distinct AI agents operating on the Base L2 network (Avantis Protocol).
 
-![Dashboard Preview](https://imgur.com/a/ueLbOgm)
+![Dashboard Preview](https://imgur.com/wnsyIbC)
 *(Replace this link with a screenshot of your actual dashboard)*
 
 ## 🤖 The Twin Engines
