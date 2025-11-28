@@ -63,7 +63,7 @@ def get_sentiment():
         return int(fng['data'][0]['value'])
     except: return 50
 
-# --- UPGRADED WALL DETECTION (HYPERLIQUID + SAFETY) ---
+# --- UPGRADED WALL DETECTION (BULLETPROOF) ---
 def fetch_liquidity_walls(limit=500):
     url = "https://api.hyperliquid.xyz/info"
     payload = {"type": "l2Book", "coin": "ETH"}
@@ -71,23 +71,19 @@ def fetch_liquidity_walls(limit=500):
         response = requests.post(url, json=payload, timeout=2)
         data = response.json()
         if 'levels' not in data: return 0, 0, 999999, 0
-        
         levels = data['levels']
         bids = pd.DataFrame(levels[0])
         asks = pd.DataFrame(levels[1])
-
         if bids.empty or asks.empty: return 0, 0, 999999, 0
-
-        # Universal Rename (Handles Dicts {'px':...} and Lists [0, 1])
+        
         col_map = {"px": "price", "sz": "size", "n": "orders", 0: "price", 1: "size", 2: "orders"}
         bids = bids.rename(columns=col_map).astype(float)
         asks = asks.rename(columns=col_map).astype(float)
-
+        
         if 'size' not in bids.columns: return 0, 0, 999999, 0
-
+        
         max_bid_idx = bids['size'].idxmax()
         max_ask_idx = asks['size'].idxmax()
-
         buy_px = bids.iloc[max_bid_idx]['price']
         buy_sz = bids.iloc[max_bid_idx]['size']
         sell_px = asks.iloc[max_ask_idx]['price']
@@ -96,9 +92,8 @@ def fetch_liquidity_walls(limit=500):
         current = (bids.iloc[0]['price'] + asks.iloc[0]['price']) / 2
         if abs(buy_px - current) / current > 0.05: buy_px = current * 0.99
         if abs(sell_px - current) / current > 0.05: sell_px = current * 1.01
-
+        
         return buy_px, buy_sz, sell_px, sell_sz
-
     except Exception as e:
         print(f"⚠️ Hyperliquid API Error: {e}")
         return 0, 0, 999999, 0
@@ -120,13 +115,11 @@ def adjust_smart_targets(signal_type, current_price, raw_tp, raw_sl):
             final_tp = min(final_tp, sell_px * 0.999)
         if current_price > buy_px > raw_sl:
             final_sl = max(final_sl, buy_px * 0.995)
-
     elif "SHORT" in signal_type:
         if raw_tp < buy_px < current_price: 
             final_tp = max(final_tp, buy_px * 1.001)
         if current_price < sell_px < raw_sl:
              final_sl = min(final_sl, sell_px * 1.005)
-
     return final_tp, final_sl, (buy_px, buy_sz, sell_px, sell_sz)
 
 def calculate_quantum_wave(closes):
@@ -211,6 +204,9 @@ async def send_telegram_alert(msg_type, price, tp, sl, reason, slope=0, whale=0,
         ai_summary = generate_trade_analysis(msg_type, price, slope, whale, fng, flow, win_prob)
         bot = Bot(token=TG_TOKEN)
 
+        risk = abs(price - sl) / price * 100 if price else 0
+        reward = abs(tp - price) / price * 100 if price else 0
+
         wall_msg = ""
         if walls and len(walls) == 4:
             b_px, b_sz, s_px, s_sz = walls
@@ -221,8 +217,9 @@ async def send_telegram_alert(msg_type, price, tp, sl, reason, slope=0, whale=0,
             )
 
         if "UPDATE" in msg_type or "HEARTBEAT" in msg_type:
+            # Dynamic Header based on Scan Direction
             message = (
-                f"📡 <b>SYSTEM HEARTBEAT | 4H SCAN</b>\n"
+                f"📡 <b>{msg_type} | 4H SCAN</b>\n"
                 f"<code>------------------------------</code>\n"
                 f"💵 <b>Price:</b> ${price:,.2f}\n"
                 f"📉 <b>Slope:</b> {slope:.2f} | 🐳 <b>Whale:</b> {whale:.2f}\n"
@@ -240,8 +237,8 @@ async def send_telegram_alert(msg_type, price, tp, sl, reason, slope=0, whale=0,
                 f"{emoji} {header}\n\n"
                 f"💵 <b>ENTRY: ${price:,.2f}</b>\n"
                 f"<code>------------------------------</code>\n"
-                f"🎯 <b>TARGET:</b> ${tp:,.2f}\n"
-                f"🛑 <b>STOP:</b>   ${sl:,.2f}\n"
+                f"🎯 <b>TARGET:</b> ${tp:,.2f} (+{reward:.1f}%)\n"
+                f"🛑 <b>STOP:</b>   ${sl:,.2f} (-{risk:.1f}%)\n"
                 f"<code>------------------------------</code>\n\n"
                 f"{wall_msg}\n"
                 f"🔥 <b>THE LOGIC:</b>\n"
@@ -262,7 +259,6 @@ async def execute_avantis_trade(action_type, current_price, sl_price, tp_price):
         client.set_local_signer(PRIVATE_KEY)
         trader_address = client.get_signer().address 
         is_long = "LONG" in action_type
-        
         if "OPEN" in action_type:
             trade_input = TradeInput(
                 trader=trader_address,
@@ -282,7 +278,7 @@ async def execute_avantis_trade(action_type, current_price, sl_price, tp_price):
     except Exception as e: print(f"❌ Execution Error: {e}"); return None
 
 async def main():
-    print(f"🧠 Quantum v9.8 (Directional Scanning) | Mode: {'SIMULATION' if SIMULATION_MODE else 'REAL'}")
+    print(f"🧠 Quantum v9.9 (Contrarian Math) | Mode: {'SIMULATION' if SIMULATION_MODE else 'REAL'}")
 
     old_state = load_state()
     is_in_position = old_state.get("is_open", False) if old_state else False
@@ -324,12 +320,15 @@ async def main():
 
             ai_sl_pct, ai_tp_pct = get_ai_parameters(closes, lows)
             
-            # --- SMART DIRECTIONAL SCANNING ---
+            # --- SMART DIRECTIONAL SCANNING (CONTRARIAN PATCH) ---
+            # Default to LONG (Bullish Trend OR Contrarian Buy)
             scan_direction = "LONG"
             raw_tp = price * (1 + ai_tp_pct)
             raw_sl = price * (1 - ai_sl_pct)
 
-            if slope < -0.5:
+            # Only switch to SHORT if trend is down AND sentiment is NOT extreme fear
+            # If FNG <= 30, we IGNORE negative slope and look for the Long Squeeze
+            if slope < -0.5 and fng > 30:
                 scan_direction = "SHORT"
                 raw_tp = price * (1 - ai_tp_pct)
                 raw_sl = price * (1 + ai_sl_pct)
@@ -338,11 +337,12 @@ async def main():
             smart_tp, smart_sl, wall_info = adjust_smart_targets(scan_direction, price, raw_tp, raw_sl)
             raw_tp = smart_tp
             raw_sl = smart_sl
-            scan_label = f"Hourly Heartbeat ({scan_direction})"
+            
+            scan_label = f"SYSTEM HEARTBEAT ({scan_direction})"
 
             if (datetime.now() - last_alert).seconds > 3600:
                 await send_telegram_alert(
-                    "SYSTEM HEARTBEAT", price, raw_tp, raw_sl, scan_label, 
+                    scan_label, price, raw_tp, raw_sl, "Hourly Heartbeat", 
                     slope, whale_ratio, fng, flow_state, current_win_prob, walls=wall_info
                 )
                 last_alert = datetime.now()
