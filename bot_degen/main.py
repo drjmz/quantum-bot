@@ -157,7 +157,7 @@ def log_signal_to_history(signal_type, price, sl, tp, conf, reason):
         if not file_exists: writer.writerow(["Timestamp", "Type", "Price", "Stop Loss", "Take Profit", "AI Conf", "Reason"])
         writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), signal_type, f"${price:.2f}", f"${sl:.2f}", f"${tp:.2f}", f"{conf:.1f}%", reason])
 
-# --- UPGRADED TELEGRAM ALERT (DEGEN VERSION) ---
+# --- UPGRADED TELEGRAM FUNCTION (DEGEN VERSION - FIXED) ---
 async def send_telegram_alert(msg_type, price, tp, sl, reason, slope=0, whale=0, fng=50, flow="N/A", win_prob=0):
     if not TG_TOKEN or not TG_CHAT_ID or Bot is None: return
     try:
@@ -178,7 +178,9 @@ async def send_telegram_alert(msg_type, price, tp, sl, reason, slope=0, whale=0,
                 f"🎲 <b>Win Prob:</b> {win_prob:.1f}%\n\n"
                 f"💭 <i>If we ape now (Hypothetical):</i>\n"
                 f"TP: ${tp:,.2f} | SL: ${sl:,.2f}\n"
-                f"<code>-------------------------</code>"
+                f"<code>-------------------------</code>\n\n"
+                f"🤖 <b>AI Roast:</b>\n"
+                f"<i>{ai_summary}</i>"
             )
 
         # STYLE 2: TRADE SIGNAL (FULL SEND)
