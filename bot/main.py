@@ -63,16 +63,10 @@ def get_sentiment():
         return int(fng['data'][0]['value'])
     except: return 50
 
-# --- LOGIC ---
-# --- UPGRADED WALL DETECTION (RETURNS SIZES) ---
+# --- UPGRADED WALL DETECTION (HYPERLIQUID + SAFETY) ---
 def fetch_liquidity_walls(limit=500):
-    """
-    Scans Hyperliquid for walls and returns Price AND Size.
-    Returns: (buy_px, buy_sz, sell_px, sell_sz)
-    """
     url = "https://api.hyperliquid.xyz/info"
     payload = {"type": "l2Book", "coin": "ETH"}
-
     try:
         response = requests.post(url, json=payload, timeout=2)
         data = response.json()
@@ -84,24 +78,21 @@ def fetch_liquidity_walls(limit=500):
 
         if bids.empty or asks.empty: return 0, 0, 999999, 0
 
-        # Rename
+        # Universal Rename (Handles Dicts {'px':...} and Lists [0, 1])
         col_map = {"px": "price", "sz": "size", "n": "orders", 0: "price", 1: "size", 2: "orders"}
         bids = bids.rename(columns=col_map).astype(float)
         asks = asks.rename(columns=col_map).astype(float)
 
         if 'size' not in bids.columns: return 0, 0, 999999, 0
 
-        # Find Biggest Walls
         max_bid_idx = bids['size'].idxmax()
         max_ask_idx = asks['size'].idxmax()
 
         buy_px = bids.iloc[max_bid_idx]['price']
         buy_sz = bids.iloc[max_bid_idx]['size']
-        
         sell_px = asks.iloc[max_ask_idx]['price']
         sell_sz = asks.iloc[max_ask_idx]['size']
         
-        # Sanity Check (5% range)
         current = (bids.iloc[0]['price'] + asks.iloc[0]['price']) / 2
         if abs(buy_px - current) / current > 0.05: buy_px = current * 0.99
         if abs(sell_px - current) / current > 0.05: sell_px = current * 1.01
@@ -120,31 +111,22 @@ def calculate_fib_levels(closes):
     return {0.5: high-(0.5*diff), 0.618: high-(0.618*diff), 0.786: high-(0.786*diff)}
 
 def adjust_smart_targets(signal_type, current_price, raw_tp, raw_sl):
-    # Unpack the 4 values (Price + Size)
     buy_px, buy_sz, sell_px, sell_sz = fetch_liquidity_walls()
-    
     final_tp = raw_tp
     final_sl = raw_sl
     
     if "LONG" in signal_type:
-        # TP: Front-run Sell Wall
         if raw_tp > sell_px > current_price: 
             final_tp = min(final_tp, sell_px * 0.999)
-            
-        # SL: Hide behind Buy Wall
         if current_price > buy_px > raw_sl:
             final_sl = max(final_sl, buy_px * 0.995)
 
     elif "SHORT" in signal_type:
-        # TP: Front-run Buy Wall
         if raw_tp < buy_px < current_price: 
             final_tp = max(final_tp, buy_px * 1.001)
-            
-        # SL: Hide behind Sell Wall
         if current_price < sell_px < raw_sl:
              final_sl = min(final_sl, sell_px * 1.005)
 
-    # Return the wall info tuple so we can log it
     return final_tp, final_sl, (buy_px, buy_sz, sell_px, sell_sz)
 
 def calculate_quantum_wave(closes):
@@ -222,7 +204,6 @@ def log_signal_to_history(signal_type, price, sl, tp, conf, reason):
         if not file_exists: writer.writerow(["Timestamp", "Type", "Price", "Stop Loss", "Take Profit", "AI Conf", "Reason"])
         writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), signal_type, f"${price:.2f}", f"${sl:.2f}", f"${tp:.2f}", f"{conf:.1f}%", reason])
 
-# --- TELEGRAM ALERT WITH WALL INFO ---
 async def send_telegram_alert(msg_type, price, tp, sl, reason, slope=0, whale=0, fng=50, flow="N/A", win_prob=0, walls=None):
     if not TG_TOKEN or not TG_CHAT_ID or Bot is None: return
     try:
@@ -230,10 +211,6 @@ async def send_telegram_alert(msg_type, price, tp, sl, reason, slope=0, whale=0,
         ai_summary = generate_trade_analysis(msg_type, price, slope, whale, fng, flow, win_prob)
         bot = Bot(token=TG_TOKEN)
 
-        risk = abs(price - sl) / price * 100 if price else 0
-        reward = abs(tp - price) / price * 100 if price else 0
-
-        # Format Wall String
         wall_msg = ""
         if walls and len(walls) == 4:
             b_px, b_sz, s_px, s_sz = walls
@@ -263,8 +240,8 @@ async def send_telegram_alert(msg_type, price, tp, sl, reason, slope=0, whale=0,
                 f"{emoji} {header}\n\n"
                 f"💵 <b>ENTRY: ${price:,.2f}</b>\n"
                 f"<code>------------------------------</code>\n"
-                f"🎯 <b>TARGET:</b> ${tp:,.2f} (+{reward:.1f}%)\n"
-                f"🛑 <b>STOP:</b>   ${sl:,.2f} (-{risk:.1f}%)\n"
+                f"🎯 <b>TARGET:</b> ${tp:,.2f}\n"
+                f"🛑 <b>STOP:</b>   ${sl:,.2f}\n"
                 f"<code>------------------------------</code>\n\n"
                 f"{wall_msg}\n"
                 f"🔥 <b>THE LOGIC:</b>\n"
@@ -305,7 +282,7 @@ async def execute_avantis_trade(action_type, current_price, sl_price, tp_price):
     except Exception as e: print(f"❌ Execution Error: {e}"); return None
 
 async def main():
-    print(f"🧠 Quantum v9.8 (Walls in Telegram) | Mode: {'SIMULATION' if SIMULATION_MODE else 'REAL'}")
+    print(f"🧠 Quantum v9.8 (Directional Scanning) | Mode: {'SIMULATION' if SIMULATION_MODE else 'REAL'}")
 
     old_state = load_state()
     is_in_position = old_state.get("is_open", False) if old_state else False
@@ -347,15 +324,25 @@ async def main():
 
             ai_sl_pct, ai_tp_pct = get_ai_parameters(closes, lows)
             
-            # FORCE WALL CHECK & GET INFO
-            smart_tp, smart_sl, wall_info = adjust_smart_targets("LONG", price, price * (1 + ai_tp_pct), price * (1 - ai_sl_pct))
+            # --- SMART DIRECTIONAL SCANNING ---
+            scan_direction = "LONG"
+            raw_tp = price * (1 + ai_tp_pct)
+            raw_sl = price * (1 - ai_sl_pct)
+
+            if slope < -0.5:
+                scan_direction = "SHORT"
+                raw_tp = price * (1 - ai_tp_pct)
+                raw_sl = price * (1 + ai_sl_pct)
+
+            # FORCE WALL CHECK
+            smart_tp, smart_sl, wall_info = adjust_smart_targets(scan_direction, price, raw_tp, raw_sl)
             raw_tp = smart_tp
             raw_sl = smart_sl
+            scan_label = f"Hourly Heartbeat ({scan_direction})"
 
-            # HOURLY ALERT (PASS WALL INFO)
             if (datetime.now() - last_alert).seconds > 3600:
                 await send_telegram_alert(
-                    "SYSTEM HEARTBEAT", price, raw_tp, raw_sl, "Hourly Heartbeat", 
+                    "SYSTEM HEARTBEAT", price, raw_tp, raw_sl, scan_label, 
                     slope, whale_ratio, fng, flow_state, current_win_prob, walls=wall_info
                 )
                 last_alert = datetime.now()

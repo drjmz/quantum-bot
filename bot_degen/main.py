@@ -28,6 +28,7 @@ BASE_RPC = "https://mainnet.base.org"
 TG_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+# --- SETTINGS ---
 TRADE_COLLATERAL = 10.0
 LEVERAGE = 50.0
 PAIR_INDEX = 0
@@ -61,7 +62,6 @@ def get_sentiment():
         return int(fng['data'][0]['value'])
     except: return 50
 
-# --- UPGRADED WALL DETECTION (RETURNS SIZES) ---
 def fetch_liquidity_walls(limit=500):
     url = "https://api.hyperliquid.xyz/info"
     payload = {"type": "l2Book", "coin": "ETH"}
@@ -160,16 +160,12 @@ def log_signal_to_history(signal_type, price, sl, tp, conf, reason):
         if not file_exists: writer.writerow(["Timestamp", "Type", "Price", "Stop Loss", "Take Profit", "AI Conf", "Reason"])
         writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), signal_type, f"${price:.2f}", f"${sl:.2f}", f"${tp:.2f}", f"{conf:.1f}%", reason])
 
-# --- TELEGRAM ALERT WITH WALL INFO ---
 async def send_telegram_alert(msg_type, price, tp, sl, reason, slope=0, whale=0, fng=50, flow="N/A", win_prob=0, walls=None):
     if not TG_TOKEN or not TG_CHAT_ID or Bot is None: return
     try:
         print("🤔 Consulting AI Analyst...")
         ai_summary = generate_trade_analysis(msg_type, price, slope, whale, fng, flow, win_prob)
         bot = Bot(token=TG_TOKEN)
-
-        risk = abs(price - sl) / price * 100 if price else 0
-        reward = abs(tp - price) / price * 100 if price else 0
 
         wall_msg = ""
         if walls and len(walls) == 4:
@@ -187,7 +183,7 @@ async def send_telegram_alert(msg_type, price, tp, sl, reason, slope=0, whale=0,
                 f"💵 <b>Price:</b> ${price:,.2f}\n"
                 f"📊 <b>Techs:</b> Slope {slope:.2f} | Whales {whale:.2f}\n"
                 f"🎲 <b>Win Prob:</b> {win_prob:.1f}%\n\n"
-                f"💭 <i>If we ape now (Hypothetical):</i>\n"
+                f"💭 <i>If we ape now ({msg_type.split('(')[-1].strip(')')}):</i>\n"
                 f"TP: ${tp:,.2f} | SL: ${sl:,.2f}\n"
                 f"<code>-------------------------</code>\n\n"
                 f"{wall_msg}\n"
@@ -242,7 +238,7 @@ async def execute_avantis_trade(action_type, current_price, sl_price, tp_price):
     except Exception as e: print(f"❌ Execution Error: {e}"); return None
 
 async def main():
-    print(f"🔥 Degen v9.8 (Walls in Telegram) | Mode: {'SIMULATION' if SIMULATION_MODE else 'REAL MONEY'}")
+    print(f"🔥 Degen v9.8 (Directional Scanning) | Mode: {'SIMULATION' if SIMULATION_MODE else 'REAL MONEY'}")
 
     old_state = load_state()
     is_in_position = old_state.get("is_open", False) if old_state else False
@@ -283,18 +279,25 @@ async def main():
             flow_state, oi_delta = analyze_flow_state(slope, current_oi, prev_oi)
             prev_oi = current_oi
 
+            # --- SMART DIRECTIONAL SCANNING ---
+            scan_direction = "LONG"
             base_tp = price * (1 + DEFAULT_TP)
             base_sl = price * (1 - DEFAULT_SL)
 
+            if slope < -0.5:
+                scan_direction = "SHORT"
+                base_tp = price * (1 - DEFAULT_TP)
+                base_sl = price * (1 + DEFAULT_SL)
+
             # FORCE WALL CHECK
-            smart_tp, smart_sl, wall_info = adjust_smart_targets("LONG", price, base_tp, base_sl)
+            smart_tp, smart_sl, wall_info = adjust_smart_targets(scan_direction, price, base_tp, base_sl)
             raw_tp = smart_tp
             raw_sl = smart_sl
+            scan_label = f"Hourly Heartbeat ({scan_direction})"
 
-            # HOURLY ALERT (PASS WALL INFO)
             if (datetime.now() - last_alert).seconds > 3600:
                 await send_telegram_alert(
-                    "DEGEN HEARTBEAT", price, raw_tp, raw_sl, "Hourly Heartbeat", 
+                    "DEGEN HEARTBEAT", price, raw_tp, raw_sl, scan_label, 
                     slope, whale_ratio, fng, flow_state, current_win_prob, walls=wall_info
                 )
                 last_alert = datetime.now()
