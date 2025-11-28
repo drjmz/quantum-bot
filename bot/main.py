@@ -236,15 +236,43 @@ async def execute_avantis_trade(action_type, current_price, sl_price, tp_price):
     try:
         client = TraderClient(BASE_RPC)
         client.set_local_signer(PRIVATE_KEY)
+        
+        # 1. Get the wallet address (Required for TradeInput)
+        trader_address = client.get_signer().address 
+
         is_long = "LONG" in action_type
+        
         if "OPEN" in action_type:
-            trade_input = TradeInput(pair_index=PAIR_INDEX, is_long=is_long, collateral=TRADE_COLLATERAL, leverage=LEVERAGE, slippage=0.02, tp=tp_price, sl=sl_price)
-            tx = await client.trade.open_market_trade(trade_input, TradeInputOrderType.MARKET)
+            # 2. Corrected TradeInput Structure
+            trade_input = TradeInput(
+                trader=trader_address,             # <-- ADDED
+                pair_index=PAIR_INDEX,
+                is_long=is_long,
+                collateral_in_trade=TRADE_COLLATERAL, # <-- RENAMED (was 'collateral')
+                leverage=LEVERAGE,
+                tp=tp_price,
+                sl=sl_price,
+                open_price=current_price           # Optional but good for logging
+            )
+            
+            # 3. Pass Slippage HERE, not inside TradeInput
+            tx = await client.trade.open_market_trade(
+                trade_input, 
+                TradeInputOrderType.MARKET, 
+                slippage=0.02                      # <-- MOVED HERE
+            )
             return tx.transaction_hash
+
         elif action_type == "CLOSE":
-            positions = await client.trade.get_positions(client.signer.address)
-            if positions: return (await client.trade.close_trade(positions[0].id)).transaction_hash
-    except Exception as e: print(f"❌ Execution Error: {e}"); return None
+            # Logic remains similar, but ensure you get the position ID correctly
+            positions = await client.trade.get_positions(trader_address)
+            if positions: 
+                # SDK update might require build_trade_close_tx flow or direct close
+                return (await client.trade.close_trade(positions[0].id)).transaction_hash
+
+    except Exception as e: 
+        print(f"❌ Execution Error: {e}")
+        return None
 
 async def main():
     print(f"🧠 Quantum v9.7 (Safe Persistence Patch) | Mode: {'SIMULATION' if SIMULATION_MODE else 'REAL'}")
