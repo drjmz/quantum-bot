@@ -105,21 +105,33 @@ def calculate_fib_levels(closes):
     diff = high - low
     return {0.5: high-(0.5*diff), 0.618: high-(0.618*diff), 0.786: high-(0.786*diff)}
 
+# --- WALL SNAPPING (WITH BREATHING ROOM FIX) ---
 def adjust_smart_targets(signal_type, current_price, raw_tp, raw_sl):
     buy_px, buy_sz, sell_px, sell_sz = fetch_liquidity_walls()
+    
     final_tp = raw_tp
     final_sl = raw_sl
     
+    # MINIMUM BREATHING ROOM (0.5%)
+    # If a wall is closer than 0.5%, we ignore it to prevent "suffocating" the trade.
+    min_dist = current_price * 0.005
+
     if "LONG" in signal_type:
-        if raw_tp > sell_px > current_price: 
+        # TP: Front-run Sell Wall (Only if far enough)
+        if raw_tp > sell_px > (current_price + min_dist): 
             final_tp = min(final_tp, sell_px * 0.999)
-        if current_price > buy_px > raw_sl:
+        # SL: Hide behind Buy Wall (Only if far enough)
+        if current_price > (buy_px + min_dist) > raw_sl:
             final_sl = max(final_sl, buy_px * 0.995)
+
     elif "SHORT" in signal_type:
-        if raw_tp < buy_px < current_price: 
+        # TP: Front-run Buy Wall
+        if raw_tp < buy_px < (current_price - min_dist): 
             final_tp = max(final_tp, buy_px * 1.001)
-        if current_price < sell_px < raw_sl:
+        # SL: Hide behind Sell Wall
+        if current_price < (sell_px - min_dist) < raw_sl:
              final_sl = min(final_sl, sell_px * 1.005)
+
     return final_tp, final_sl, (buy_px, buy_sz, sell_px, sell_sz)
 
 def calculate_quantum_wave(closes):
@@ -217,7 +229,6 @@ async def send_telegram_alert(msg_type, price, tp, sl, reason, slope=0, whale=0,
             )
 
         if "UPDATE" in msg_type or "HEARTBEAT" in msg_type:
-            # Dynamic Header based on Scan Direction
             message = (
                 f"📡 <b>{msg_type} | 4H SCAN</b>\n"
                 f"<code>------------------------------</code>\n"
@@ -278,7 +289,7 @@ async def execute_avantis_trade(action_type, current_price, sl_price, tp_price):
     except Exception as e: print(f"❌ Execution Error: {e}"); return None
 
 async def main():
-    print(f"🧠 Quantum v9.9 (Contrarian Math) | Mode: {'SIMULATION' if SIMULATION_MODE else 'REAL'}")
+    print(f"🧠 Quantum v9.9 (Contrarian Math + Wall Fix) | Mode: {'SIMULATION' if SIMULATION_MODE else 'REAL'}")
 
     old_state = load_state()
     is_in_position = old_state.get("is_open", False) if old_state else False
@@ -321,13 +332,10 @@ async def main():
             ai_sl_pct, ai_tp_pct = get_ai_parameters(closes, lows)
             
             # --- SMART DIRECTIONAL SCANNING (CONTRARIAN PATCH) ---
-            # Default to LONG (Bullish Trend OR Contrarian Buy)
             scan_direction = "LONG"
             raw_tp = price * (1 + ai_tp_pct)
             raw_sl = price * (1 - ai_sl_pct)
 
-            # Only switch to SHORT if trend is down AND sentiment is NOT extreme fear
-            # If FNG <= 30, we IGNORE negative slope and look for the Long Squeeze
             if slope < -0.5 and fng > 30:
                 scan_direction = "SHORT"
                 raw_tp = price * (1 - ai_tp_pct)

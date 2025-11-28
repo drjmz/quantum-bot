@@ -92,20 +92,24 @@ def fetch_liquidity_walls(limit=500):
         print(f"⚠️ Hyperliquid API Error: {e}")
         return 0, 0, 999999, 0
 
+# --- WALL SNAPPING (WITH BREATHING ROOM FIX) ---
 def adjust_smart_targets(signal_type, current_price, raw_tp, raw_sl):
     buy_px, buy_sz, sell_px, sell_sz = fetch_liquidity_walls()
     final_tp = raw_tp
     final_sl = raw_sl
     
+    # MINIMUM BREATHING ROOM (0.5%)
+    min_dist = current_price * 0.005
+
     if "LONG" in signal_type:
-        if raw_tp > sell_px > current_price: 
+        if raw_tp > sell_px > (current_price + min_dist): 
             final_tp = min(final_tp, sell_px * 0.999)
-        if current_price > buy_px > raw_sl:
+        if current_price > (buy_px + min_dist) > raw_sl:
             final_sl = max(final_sl, buy_px * 0.995)
     elif "SHORT" in signal_type:
-        if raw_tp < buy_px < current_price: 
+        if raw_tp < buy_px < (current_price - min_dist): 
             final_tp = max(final_tp, buy_px * 1.001)
-        if current_price < sell_px < raw_sl:
+        if current_price < (sell_px - min_dist) < raw_sl:
              final_sl = min(final_sl, sell_px * 1.005)
     return final_tp, final_sl, (buy_px, buy_sz, sell_px, sell_sz)
 
@@ -181,14 +185,13 @@ async def send_telegram_alert(msg_type, price, tp, sl, reason, slope=0, whale=0,
             )
 
         if "UPDATE" in msg_type or "HEARTBEAT" in msg_type:
-            # Dynamic Header
             message = (
                 f"📡 <b>DEGEN RADAR | {msg_type}</b>\n"
                 f"<code>-------------------------</code>\n"
                 f"💵 <b>Price:</b> ${price:,.2f}\n"
                 f"📊 <b>Techs:</b> Slope {slope:.2f} | Whales {whale:.2f}\n"
                 f"🎲 <b>Win Prob:</b> {win_prob:.1f}%\n\n"
-                f"💭 <i>If we ape now (Hypothetical):</i>\n"
+                f"💭 <i>If we ape now ({msg_type.split('(')[-1].strip(')')}):</i>\n"
                 f"TP: ${tp:,.2f} | SL: ${sl:,.2f}\n"
                 f"<code>-------------------------</code>\n\n"
                 f"{wall_msg}\n"
@@ -243,7 +246,7 @@ async def execute_avantis_trade(action_type, current_price, sl_price, tp_price):
     except Exception as e: print(f"❌ Execution Error: {e}"); return None
 
 async def main():
-    print(f"🔥 Degen v9.9 (Contrarian Math) | Mode: {'SIMULATION' if SIMULATION_MODE else 'REAL MONEY'}")
+    print(f"🔥 Degen v9.9 (Contrarian Math + Wall Fix) | Mode: {'SIMULATION' if SIMULATION_MODE else 'REAL MONEY'}")
 
     old_state = load_state()
     is_in_position = old_state.get("is_open", False) if old_state else False
@@ -304,7 +307,7 @@ async def main():
 
             if (datetime.now() - last_alert).seconds > 3600:
                 await send_telegram_alert(
-                    scan_label, price, raw_tp, raw_sl, "Hourly Heartbeat", # <--- PASS LABEL HERE
+                    scan_label, price, raw_tp, raw_sl, "Hourly Heartbeat", 
                     slope, whale_ratio, fng, flow_state, current_win_prob, walls=wall_info
                 )
                 last_alert = datetime.now()
