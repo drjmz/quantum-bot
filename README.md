@@ -4,8 +4,6 @@ A high-frequency trading system comprising two distinct AI agents operating on t
 
 <img width="1742" height="930" alt="Screenshot 2025-11-28 145257" src="https://github.com/user-attachments/assets/ac470555-4402-44b9-a954-2da5a5dbe3a4" />
 
-*(Replace this link with a screenshot of your actual dashboard)*
-
 ## 🤖 The Twin Engines
 
 1.  **🛡️ Safe Bot (Quantum):**
