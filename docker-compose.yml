@@ -53,6 +53,7 @@ services:
     restart: unless-stopped
     environment:
       - PYTHONUNBUFFERED=1
+      - SIMULATION_MODE=True
       # Override log files so they don't overwrite each other
       - STATE_FILE=data/degen_state.json
       - SIGNAL_LOG_FILE=data/degen_signals.csv

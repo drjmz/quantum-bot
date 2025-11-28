@@ -40,9 +40,12 @@ CONFIRMATION_MINUTES = 5
 def fetch_candles():
     try:
         url = f"https://api.binance.com/api/v3/klines?symbol={SYMBOL}&interval={TIMEFRAME}&limit=100"
-        data = requests.get(url).json()
+        # Timeout added to prevent hanging
+        data = requests.get(url, timeout=5).json()
         return np.array([float(x[4]) for x in data]), np.array([float(x[3]) for x in data])
-    except: return np.array([]), np.array([])
+    except Exception as e: 
+        print(f"❌ FETCH ERROR: {e}") # <--- This will show us the problem
+        return np.array([]), np.array([])
 
 def fetch_smart_money_data():
     ls_ratio = 1.0

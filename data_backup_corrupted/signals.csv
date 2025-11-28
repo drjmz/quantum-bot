@@ -1,0 +1,4 @@
+Timestamp,Type,Price,Stop Loss,Take Profit,AI Conf,Reason
+2025-11-25 08:59:08,LONG,$2871.09,$2813.38,$2934.54,35.6%,Trend Up + Whales (2.87)
+2025-11-25 10:20:14,LONG,$2880.93,$2823.31,$2967.36,35.3%,Trend + Whales (3.19) + AI (35%)
+2025-11-25 21:56:20,LONG,$2937.80,$2879.04,$3025.93,35.3%,Confirmed Trend + Whales (3.06)
