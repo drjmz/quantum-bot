@@ -64,11 +64,11 @@ def get_sentiment():
     except: return 50
 
 # --- LOGIC ---
-# --- UPGRADED WALL DETECTION (BULLETPROOF) ---
+# --- UPGRADED WALL DETECTION (RETURNS SIZES) ---
 def fetch_liquidity_walls(limit=500):
     """
-    Scans Hyperliquid (Mainnet) for walls. 
-    Includes safety checks for empty data/format changes.
+    Scans Hyperliquid for walls and returns Price AND Size.
+    Returns: (buy_px, buy_sz, sell_px, sell_sz)
     """
     url = "https://api.hyperliquid.xyz/info"
     payload = {"type": "l2Book", "coin": "ETH"}
@@ -76,53 +76,41 @@ def fetch_liquidity_walls(limit=500):
     try:
         response = requests.post(url, json=payload, timeout=2)
         data = response.json()
+        if 'levels' not in data: return 0, 0, 999999, 0
         
-        # Safety Check 1: Does 'levels' exist?
-        if 'levels' not in data: return 0, 999999
         levels = data['levels']
-
-        # 1. Create DataFrames
         bids = pd.DataFrame(levels[0])
         asks = pd.DataFrame(levels[1])
 
-        # Safety Check 2: Are they empty?
-        if bids.empty or asks.empty: return 0, 999999
+        if bids.empty or asks.empty: return 0, 0, 999999, 0
 
-        # 2. Universal Rename (Handles both Dicts {'px':...} and Lists [0, 1])
-        # We map ALL potential keys to our standard names
-        column_map = {
-            "px": "price", "sz": "size", "n": "orders",  # Dict keys
-            0: "price", 1: "size", 2: "orders"           # List indices
-        }
-        bids = bids.rename(columns=column_map)
-        asks = asks.rename(columns=column_map)
+        # Rename
+        col_map = {"px": "price", "sz": "size", "n": "orders", 0: "price", 1: "size", 2: "orders"}
+        bids = bids.rename(columns=col_map).astype(float)
+        asks = asks.rename(columns=col_map).astype(float)
 
-        # Safety Check 3: Did we actually get the 'size' column?
-        if 'size' not in bids.columns or 'size' not in asks.columns:
-            print(f"⚠️ Hyperliquid Format Warning. Columns: {bids.columns}")
-            return 0, 999999
+        if 'size' not in bids.columns: return 0, 0, 999999, 0
 
-        # 3. Convert to Float
-        bids = bids.astype(float)
-        asks = asks.astype(float)
-
-        # 4. Find Walls
+        # Find Biggest Walls
         max_bid_idx = bids['size'].idxmax()
         max_ask_idx = asks['size'].idxmax()
 
-        support_wall = bids.iloc[max_bid_idx]['price']
-        resistance_wall = asks.iloc[max_ask_idx]['price']
+        buy_px = bids.iloc[max_bid_idx]['price']
+        buy_sz = bids.iloc[max_bid_idx]['size']
         
-        # 5. Sanity Check
+        sell_px = asks.iloc[max_ask_idx]['price']
+        sell_sz = asks.iloc[max_ask_idx]['size']
+        
+        # Sanity Check (5% range)
         current = (bids.iloc[0]['price'] + asks.iloc[0]['price']) / 2
-        if abs(support_wall - current) / current > 0.05: support_wall = current * 0.99
-        if abs(resistance_wall - current) / current > 0.05: resistance_wall = current * 1.01
+        if abs(buy_px - current) / current > 0.05: buy_px = current * 0.99
+        if abs(sell_px - current) / current > 0.05: sell_px = current * 1.01
 
-        return support_wall, resistance_wall
+        return buy_px, buy_sz, sell_px, sell_sz
 
     except Exception as e:
         print(f"⚠️ Hyperliquid API Error: {e}")
-        return 0, 999999
+        return 0, 0, 999999, 0
 
 def calculate_fib_levels(closes):
     if len(closes) < 50: return {}
@@ -132,32 +120,32 @@ def calculate_fib_levels(closes):
     return {0.5: high-(0.5*diff), 0.618: high-(0.618*diff), 0.786: high-(0.786*diff)}
 
 def adjust_smart_targets(signal_type, current_price, raw_tp, raw_sl):
-    support_wall, resistance_wall = fetch_liquidity_walls()
+    # Unpack the 4 values (Price + Size)
+    buy_px, buy_sz, sell_px, sell_sz = fetch_liquidity_walls()
     
     final_tp = raw_tp
     final_sl = raw_sl
     
     if "LONG" in signal_type:
-        # 1. TP LOGIC: Front-run the Sell Wall (Sell before the crowd)
-        if raw_tp > resistance_wall > current_price: 
-            final_tp = min(final_tp, resistance_wall * 0.999)
+        # TP: Front-run Sell Wall
+        if raw_tp > sell_px > current_price: 
+            final_tp = min(final_tp, sell_px * 0.999)
             
-        # 2. SL LOGIC: Hide behind the Buy Wall (Use wall as a shield)
-        # If the wall is between our Entry and our calculated SL, tighten the SL 
-        # to just below the wall.
-        if current_price > support_wall > raw_sl:
-            final_sl = max(final_sl, support_wall * 0.995) # 0.5% buffer below wall
+        # SL: Hide behind Buy Wall
+        if current_price > buy_px > raw_sl:
+            final_sl = max(final_sl, buy_px * 0.995)
 
     elif "SHORT" in signal_type:
-        # 1. TP LOGIC: Front-run the Buy Wall (Buy back before the crowd)
-        if raw_tp < support_wall < current_price: 
-            final_tp = max(final_tp, support_wall * 1.001)
+        # TP: Front-run Buy Wall
+        if raw_tp < buy_px < current_price: 
+            final_tp = max(final_tp, buy_px * 1.001)
             
-        # 2. SL LOGIC: Hide behind the Sell Wall
-        if current_price < resistance_wall < raw_sl:
-             final_sl = min(final_sl, resistance_wall * 1.005) # 0.5% buffer above wall
+        # SL: Hide behind Sell Wall
+        if current_price < sell_px < raw_sl:
+             final_sl = min(final_sl, sell_px * 1.005)
 
-    return final_tp, final_sl
+    # Return the wall info tuple so we can log it
+    return final_tp, final_sl, (buy_px, buy_sz, sell_px, sell_sz)
 
 def calculate_quantum_wave(closes):
     if len(closes) < 21: return 0, 0
@@ -199,9 +187,7 @@ def get_ai_parameters(closes, lows):
         return max(0.005, min(prediction[0], 0.10)), max(0.01, min(prediction[1], 0.20))
     except: return DEFAULT_SL, DEFAULT_TP
 
-# --- STATE MANAGEMENT (NOW WITH PERSISTENCE) ---
 def update_state(status, is_open, entry, price, fng, slope, spread, win_prob, whale_ratio, decision, reason, suggest_sl, suggest_tp, flow_state, oi_delta, pending_info, active_signal_type, signal_start_time):
-    # Convert signal_start_time to string if it exists
     start_str = signal_start_time.isoformat() if signal_start_time else None
     
     state = {
@@ -213,7 +199,6 @@ def update_state(status, is_open, entry, price, fng, slope, spread, win_prob, wh
         "suggested_sl": suggest_sl, "suggested_tp": suggest_tp,
         "leverage": LEVERAGE, "flow_state": flow_state, "oi_delta": oi_delta,
         "pending_signal": pending_info,
-        # SAVING CRITICAL SIGNAL DATA
         "active_signal_type": active_signal_type,
         "signal_start_time": start_str
     }
@@ -237,7 +222,8 @@ def log_signal_to_history(signal_type, price, sl, tp, conf, reason):
         if not file_exists: writer.writerow(["Timestamp", "Type", "Price", "Stop Loss", "Take Profit", "AI Conf", "Reason"])
         writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), signal_type, f"${price:.2f}", f"${sl:.2f}", f"${tp:.2f}", f"{conf:.1f}%", reason])
 
-async def send_telegram_alert(msg_type, price, tp, sl, reason, slope=0, whale=0, fng=50, flow="N/A", win_prob=0):
+# --- TELEGRAM ALERT WITH WALL INFO ---
+async def send_telegram_alert(msg_type, price, tp, sl, reason, slope=0, whale=0, fng=50, flow="N/A", win_prob=0, walls=None):
     if not TG_TOKEN or not TG_CHAT_ID or Bot is None: return
     try:
         print("🤔 Consulting AI Analyst...")
@@ -247,7 +233,16 @@ async def send_telegram_alert(msg_type, price, tp, sl, reason, slope=0, whale=0,
         risk = abs(price - sl) / price * 100 if price else 0
         reward = abs(tp - price) / price * 100 if price else 0
 
-        # STYLE 1: HEARTBEAT
+        # Format Wall String
+        wall_msg = ""
+        if walls and len(walls) == 4:
+            b_px, b_sz, s_px, s_sz = walls
+            wall_msg = (
+                f"🧱 <b>Liquidity Walls:</b>\n"
+                f"🟢 Buy: ${b_px:,.2f} ({b_sz:.0f} ETH)\n"
+                f"🔴 Sell: ${s_px:,.2f} ({s_sz:.0f} ETH)\n"
+            )
+
         if "UPDATE" in msg_type or "HEARTBEAT" in msg_type:
             message = (
                 f"📡 <b>SYSTEM HEARTBEAT | 4H SCAN</b>\n"
@@ -257,10 +252,9 @@ async def send_telegram_alert(msg_type, price, tp, sl, reason, slope=0, whale=0,
                 f"🧠 <b>AI Confidence:</b> {win_prob:.1f}%\n\n"
                 f"🔭 <i>Hypothetical Targets:</i>\n"
                 f"Target: ${tp:,.2f} | Stop: ${sl:,.2f}\n\n"
+                f"{wall_msg}\n"
                 f"🤖 <b>AI Log:</b> {ai_summary}"
             )
-
-        # STYLE 2: TRADE SIGNAL
         else:
             emoji = "🚫" if "INVALID" in msg_type else "🚨" if "SHORT" in msg_type else "🚀"
             header = f"⚠️ <b>ACTION REQUIRED: {msg_type}</b> ⚠️"
@@ -272,6 +266,7 @@ async def send_telegram_alert(msg_type, price, tp, sl, reason, slope=0, whale=0,
                 f"🎯 <b>TARGET:</b> ${tp:,.2f} (+{reward:.1f}%)\n"
                 f"🛑 <b>STOP:</b>   ${sl:,.2f} (-{risk:.1f}%)\n"
                 f"<code>------------------------------</code>\n\n"
+                f"{wall_msg}\n"
                 f"🔥 <b>THE LOGIC:</b>\n"
                 f"{reason}\n\n"
                 f"🤖 <b>AI ANALYST INSIGHT:</b>\n"
@@ -288,57 +283,36 @@ async def execute_avantis_trade(action_type, current_price, sl_price, tp_price):
     try:
         client = TraderClient(BASE_RPC)
         client.set_local_signer(PRIVATE_KEY)
-        
-        # 1. Get the wallet address (Required for TradeInput)
         trader_address = client.get_signer().address 
-
         is_long = "LONG" in action_type
         
         if "OPEN" in action_type:
-            # 2. Corrected TradeInput Structure
             trade_input = TradeInput(
-                trader=trader_address,             # <-- ADDED
+                trader=trader_address,
                 pair_index=PAIR_INDEX,
                 is_long=is_long,
-                collateral_in_trade=TRADE_COLLATERAL, # <-- RENAMED (was 'collateral')
+                collateral_in_trade=TRADE_COLLATERAL,
                 leverage=LEVERAGE,
                 tp=tp_price,
                 sl=sl_price,
-                open_price=current_price           # Optional but good for logging
+                open_price=current_price
             )
-            
-            # 3. Pass Slippage HERE, not inside TradeInput
-            tx = await client.trade.open_market_trade(
-                trade_input, 
-                TradeInputOrderType.MARKET, 
-                slippage=0.02                      # <-- MOVED HERE
-            )
+            tx = await client.trade.open_market_trade(trade_input, TradeInputOrderType.MARKET, slippage=0.02)
             return tx.transaction_hash
-
         elif action_type == "CLOSE":
-            # Logic remains similar, but ensure you get the position ID correctly
             positions = await client.trade.get_positions(trader_address)
-            if positions: 
-                # SDK update might require build_trade_close_tx flow or direct close
-                return (await client.trade.close_trade(positions[0].id)).transaction_hash
-
-    except Exception as e: 
-        print(f"❌ Execution Error: {e}")
-        return None
+            if positions: return (await client.trade.close_trade(positions[0].id)).transaction_hash
+    except Exception as e: print(f"❌ Execution Error: {e}"); return None
 
 async def main():
-    print(f"🧠 Quantum v9.7 (Safe Persistence Patch) | Mode: {'SIMULATION' if SIMULATION_MODE else 'REAL'}")
+    print(f"🧠 Quantum v9.8 (Walls in Telegram) | Mode: {'SIMULATION' if SIMULATION_MODE else 'REAL'}")
 
     old_state = load_state()
     is_in_position = old_state.get("is_open", False) if old_state else False
     entry_price = old_state.get("entry_price", 0) if old_state else 0
-
-    # RESTORE STATE IF EXISTS
     active_signal_type = old_state.get("active_signal_type", None) if old_state else None
     signal_start_str = old_state.get("signal_start_time", None) if old_state else None
     signal_start_time = datetime.fromisoformat(signal_start_str) if signal_start_str else None
-    
-    # Restoring specific targets if they exist in JSON, otherwise 0
     signal_tp = old_state.get("suggested_tp", 0) if old_state else 0
     signal_sl = old_state.get("suggested_sl", 0) if old_state else 0
 
@@ -351,7 +325,6 @@ async def main():
     status_freeze_until = None
     frozen_decision = ""
     frozen_reason = ""
-    
     was_in_position = is_in_position
 
     while True:
@@ -359,7 +332,6 @@ async def main():
             if (datetime.now() - boot_time).seconds < 60: 
                 fetch_smart_money_data(); await asyncio.sleep(5); continue
 
-            # --- 1. ACCELERATED LEARNING ---
             if (datetime.now() - last_learning).seconds > 3600:
                 print("🧠 RE-TRAINING AI MODEL (Hourly Cycle)...")
                 current_win_prob = run_learning_cycle()
@@ -374,18 +346,17 @@ async def main():
             prev_oi = current_oi
 
             ai_sl_pct, ai_tp_pct = get_ai_parameters(closes, lows)
-            # FORCE WALL CHECK NOW
-            # Use "LONG" logic for hypothetical scanning to see Support Walls
-            smart_tp, smart_sl = adjust_smart_targets("LONG", price, price * (1 + ai_tp_pct), price * (1 - ai_sl_pct))
             
-            # Update variables so Telegram/Dashboard see the Wall-Adjusted numbers
+            # FORCE WALL CHECK & GET INFO
+            smart_tp, smart_sl, wall_info = adjust_smart_targets("LONG", price, price * (1 + ai_tp_pct), price * (1 - ai_sl_pct))
             raw_tp = smart_tp
             raw_sl = smart_sl
-            # --- 2. HOURLY ALERT ---
+
+            # HOURLY ALERT (PASS WALL INFO)
             if (datetime.now() - last_alert).seconds > 3600:
                 await send_telegram_alert(
                     "SYSTEM HEARTBEAT", price, raw_tp, raw_sl, "Hourly Heartbeat", 
-                    slope, whale_ratio, fng, flow_state, current_win_prob
+                    slope, whale_ratio, fng, flow_state, current_win_prob, walls=wall_info
                 )
                 last_alert = datetime.now()
 
@@ -393,13 +364,11 @@ async def main():
             reason = f"Slope: {slope:.4f} | Whales: {whale_ratio:.2f}"
             pending_info = None
 
-            # --- 3. POSITION MANAGEMENT ---
             if is_in_position:
                 was_in_position = True
                 pnl = abs((price - entry_price) / entry_price) * 100
                 decision = "HOLDING"
                 reason = f"On-Chain Protection Active. PnL: {pnl:.2f}%"
-            
             elif was_in_position and not is_in_position:
                 print("🎓 Trade Closed. Initiating IMMEDIATE Learning Cycle...")
                 await asyncio.sleep(10)
@@ -407,20 +376,13 @@ async def main():
                 last_learning = datetime.now()
                 was_in_position = False
 
-            # --- 4. STATUS FREEZE & INVALIDATION ---
             if status_freeze_until and datetime.now() < status_freeze_until:
                 decision = frozen_decision
                 reason = frozen_reason
-
             elif active_signal_type and not is_in_position:
-                if signal_start_time:
-                    elapsed_mins = (datetime.now() - signal_start_time).seconds / 60
-                else:
-                    elapsed_mins = 0
-
+                elapsed_mins = (datetime.now() - signal_timestamp).seconds / 60
                 is_invalid = False
                 invalid_reason = ""
-
                 if elapsed_mins > 30: is_invalid = True; invalid_reason = "Timed Out (30m)"
                 if active_signal_type == "LONG" and slope < -0.5: is_invalid = True; invalid_reason = "Trend Broken"
                 if active_signal_type == "SHORT" and slope > 0.5: is_invalid = True; invalid_reason = "Trend Broken"
@@ -429,16 +391,14 @@ async def main():
                     print(f"🚫 {invalid_reason}")
                     log_signal_to_history(f"CANCEL {active_signal_type}", price, 0, 0, current_win_prob, invalid_reason)
                     await send_telegram_alert(f"{active_signal_type} INVALIDATED", price, 0, 0, invalid_reason, slope, whale_ratio, fng, flow_state, current_win_prob)
-
                     status_freeze_until = datetime.now() + timedelta(minutes=15)
                     frozen_decision = "🚫 SIGNAL INVALIDATED"
                     frozen_reason = f"Reason: {invalid_reason}"
-                    active_signal_type = None; signal_start_time = None
+                    active_signal_type = None; signal_timestamp = None
                 else:
                     decision = f"🚀 {active_signal_type} ACTIVE ({int(elapsed_mins)}m)"
                     reason = "Signal Valid. Waiting for Manual Entry."
 
-            # --- 5. SIGNAL SCAN ---
             elif not is_in_position and not status_freeze_until:
                 trend_up = slope > 0.5
                 whale_buy = (whale_ratio > 1.2) and (fng < 40)
@@ -452,32 +412,24 @@ async def main():
                 if detected:
                     req_conf = 30 if whale_buy else 40
                     if current_win_prob > req_conf:
-                        smart_tp, smart_sl, adj_note = adjust_smart_targets(detected, price, raw_tp, raw_sl)
+                        smart_tp, smart_sl, wall_info = adjust_smart_targets(detected, price, raw_tp, raw_sl)
 
                         if active_signal_type != detected:
                             active_signal_type = detected
-                            signal_start_time = datetime.now()
+                            signal_timestamp = datetime.now()
                             signal_tp = smart_tp
                             signal_sl = smart_sl
 
                         decision = f"🚀 {detected} SIGNAL"
                         reason = f"Trend/Bounce + AI ({current_win_prob:.0f}%)"
-
                         log_signal_to_history(detected, price, smart_sl, smart_tp, current_win_prob, reason)
                         
                         await send_telegram_alert(
                             f"{detected} ETH", price, smart_tp, smart_sl, reason, 
-                            slope, whale_ratio, fng, flow_state, current_win_prob
+                            slope, whale_ratio, fng, flow_state, current_win_prob, walls=wall_info
                         )
 
-            # --- 6. DISPLAY SYNC (FIXED FOR 0.00 ISSUE) ---
-            # If we are in a trade, we KEEP the original signal TP/SL.
-            # If we are scanning, we show the raw market TP/SL.
-            # If active_signal_type was restored, use its values.
-            # Fallback: If in position but TP is 0 (lost data), show raw targets.
-            
             if is_in_position and signal_tp == 0:
-                 # Lost persistence case: Show current dynamic targets
                  display_sl = raw_sl
                  display_tp = raw_tp
             elif active_signal_type or is_in_position:
