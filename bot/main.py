@@ -5,6 +5,7 @@ import requests
 import numpy as np
 import joblib
 import csv
+import pandas as pd
 from scipy.signal import savgol_filter
 from datetime import datetime, timedelta
 try: from telegram import Bot
@@ -63,14 +64,65 @@ def get_sentiment():
     except: return 50
 
 # --- LOGIC ---
+# --- UPGRADED WALL DETECTION (BULLETPROOF) ---
 def fetch_liquidity_walls(limit=500):
+    """
+    Scans Hyperliquid (Mainnet) for walls. 
+    Includes safety checks for empty data/format changes.
+    """
+    url = "https://api.hyperliquid.xyz/info"
+    payload = {"type": "l2Book", "coin": "ETH"}
+
     try:
-        url = f"https://api.binance.com/api/v3/depth?symbol={SYMBOL}&limit={limit}"
-        data = requests.get(url, timeout=5).json()
-        bids = np.array(data['bids'], dtype=float)
-        asks = np.array(data['asks'], dtype=float)
-        return bids[np.argmax(bids[:, 1]), 0], asks[np.argmax(asks[:, 1]), 0]
-    except: return 0, 999999
+        response = requests.post(url, json=payload, timeout=2)
+        data = response.json()
+        
+        # Safety Check 1: Does 'levels' exist?
+        if 'levels' not in data: return 0, 999999
+        levels = data['levels']
+
+        # 1. Create DataFrames
+        bids = pd.DataFrame(levels[0])
+        asks = pd.DataFrame(levels[1])
+
+        # Safety Check 2: Are they empty?
+        if bids.empty or asks.empty: return 0, 999999
+
+        # 2. Universal Rename (Handles both Dicts {'px':...} and Lists [0, 1])
+        # We map ALL potential keys to our standard names
+        column_map = {
+            "px": "price", "sz": "size", "n": "orders",  # Dict keys
+            0: "price", 1: "size", 2: "orders"           # List indices
+        }
+        bids = bids.rename(columns=column_map)
+        asks = asks.rename(columns=column_map)
+
+        # Safety Check 3: Did we actually get the 'size' column?
+        if 'size' not in bids.columns or 'size' not in asks.columns:
+            print(f"⚠️ Hyperliquid Format Warning. Columns: {bids.columns}")
+            return 0, 999999
+
+        # 3. Convert to Float
+        bids = bids.astype(float)
+        asks = asks.astype(float)
+
+        # 4. Find Walls
+        max_bid_idx = bids['size'].idxmax()
+        max_ask_idx = asks['size'].idxmax()
+
+        support_wall = bids.iloc[max_bid_idx]['price']
+        resistance_wall = asks.iloc[max_ask_idx]['price']
+        
+        # 5. Sanity Check
+        current = (bids.iloc[0]['price'] + asks.iloc[0]['price']) / 2
+        if abs(support_wall - current) / current > 0.05: support_wall = current * 0.99
+        if abs(resistance_wall - current) / current > 0.05: resistance_wall = current * 1.01
+
+        return support_wall, resistance_wall
+
+    except Exception as e:
+        print(f"⚠️ Hyperliquid API Error: {e}")
+        return 0, 999999
 
 def calculate_fib_levels(closes):
     if len(closes) < 50: return {}
@@ -322,9 +374,13 @@ async def main():
             prev_oi = current_oi
 
             ai_sl_pct, ai_tp_pct = get_ai_parameters(closes, lows)
-            raw_tp = price * (1 + ai_tp_pct)
-            raw_sl = price * (1 - ai_sl_pct)
-
+            # FORCE WALL CHECK NOW
+            # Use "LONG" logic for hypothetical scanning to see Support Walls
+            smart_tp, smart_sl = adjust_smart_targets("LONG", price, price * (1 + ai_tp_pct), price * (1 - ai_sl_pct))
+            
+            # Update variables so Telegram/Dashboard see the Wall-Adjusted numbers
+            raw_tp = smart_tp
+            raw_sl = smart_sl
             # --- 2. HOURLY ALERT ---
             if (datetime.now() - last_alert).seconds > 3600:
                 await send_telegram_alert(

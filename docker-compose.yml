@@ -21,8 +21,10 @@ services:
   bot_safe:
     build: ./bot
     container_name: quantum_bot_safe
+    network_mode: host
     volumes:
       - ./data:/app/data
+      - ./research:/app/research
     env_file:
       - .env
     logging:
@@ -38,6 +40,7 @@ services:
   bot_degen:
     build: ./bot_degen
     container_name: quantum_bot_degen
+    network_mode: host
     volumes:
       - ./data:/app/data
     env_file:

@@ -5,6 +5,7 @@ import requests
 import numpy as np
 import joblib
 import csv
+import pandas as pd
 from scipy.signal import savgol_filter
 from datetime import datetime, timedelta
 try: from telegram import Bot
@@ -66,14 +67,65 @@ def get_sentiment():
     except: return 50
 
 # --- LOGIC ---
+# --- UPGRADED WALL DETECTION (BULLETPROOF) ---
 def fetch_liquidity_walls(limit=500):
+    """
+    Scans Hyperliquid (Mainnet) for walls. 
+    Includes safety checks for empty data/format changes.
+    """
+    url = "https://api.hyperliquid.xyz/info"
+    payload = {"type": "l2Book", "coin": "ETH"}
+
     try:
-        url = f"https://api.binance.com/api/v3/depth?symbol={SYMBOL}&limit={limit}"
-        data = requests.get(url, timeout=5).json()
-        bids = np.array(data['bids'], dtype=float)
-        asks = np.array(data['asks'], dtype=float)
-        return bids[np.argmax(bids[:, 1]), 0], asks[np.argmax(asks[:, 1]), 0]
-    except: return 0, 999999
+        response = requests.post(url, json=payload, timeout=2)
+        data = response.json()
+        
+        # Safety Check 1: Does 'levels' exist?
+        if 'levels' not in data: return 0, 999999
+        levels = data['levels']
+
+        # 1. Create DataFrames
+        bids = pd.DataFrame(levels[0])
+        asks = pd.DataFrame(levels[1])
+
+        # Safety Check 2: Are they empty?
+        if bids.empty or asks.empty: return 0, 999999
+
+        # 2. Universal Rename (Handles both Dicts {'px':...} and Lists [0, 1])
+        # We map ALL potential keys to our standard names
+        column_map = {
+            "px": "price", "sz": "size", "n": "orders",  # Dict keys
+            0: "price", 1: "size", 2: "orders"           # List indices
+        }
+        bids = bids.rename(columns=column_map)
+        asks = asks.rename(columns=column_map)
+
+        # Safety Check 3: Did we actually get the 'size' column?
+        if 'size' not in bids.columns or 'size' not in asks.columns:
+            print(f"⚠️ Hyperliquid Format Warning. Columns: {bids.columns}")
+            return 0, 999999
+
+        # 3. Convert to Float
+        bids = bids.astype(float)
+        asks = asks.astype(float)
+
+        # 4. Find Walls
+        max_bid_idx = bids['size'].idxmax()
+        max_ask_idx = asks['size'].idxmax()
+
+        support_wall = bids.iloc[max_bid_idx]['price']
+        resistance_wall = asks.iloc[max_ask_idx]['price']
+        
+        # 5. Sanity Check
+        current = (bids.iloc[0]['price'] + asks.iloc[0]['price']) / 2
+        if abs(support_wall - current) / current > 0.05: support_wall = current * 0.99
+        if abs(resistance_wall - current) / current > 0.05: resistance_wall = current * 1.01
+
+        return support_wall, resistance_wall
+
+    except Exception as e:
+        print(f"⚠️ Hyperliquid API Error: {e}")
+        return 0, 999999
 
 def adjust_smart_targets(signal_type, current_price, raw_tp, raw_sl):
     support_wall, resistance_wall = fetch_liquidity_walls()
@@ -125,7 +177,7 @@ def get_ai_parameters(closes):
 
 def update_state(status, is_open, entry, price, fng, slope, spread, win_prob, whale_ratio, decision, reason, suggest_sl, suggest_tp, flow_state, oi_delta, pending_info, active_signal_type, signal_start_time):
     start_str = signal_start_time.isoformat() if signal_start_time else None
-
+    
     state = {
         "status": status, "is_open": is_open, "entry_price": entry,
         "current_price": price, "last_update": datetime.now().strftime("%H:%M:%S"),
@@ -250,7 +302,7 @@ async def execute_avantis_trade(action_type, current_price, sl_price, tp_price):
         return None
 
 async def main():
-    print(f"🔥 Degen v9.6 (Accelerated Learning) | Mode: {'SIMULATION' if SIMULATION_MODE else 'REAL MONEY'}")
+    print(f"🔥 Degen v9.7 (Hyperliquid + Wall Vision) | Mode: {'SIMULATION' if SIMULATION_MODE else 'REAL MONEY'}")
 
     old_state = load_state()
     is_in_position = old_state.get("is_open", False) if old_state else False
@@ -295,11 +347,17 @@ async def main():
             flow_state, oi_delta = analyze_flow_state(slope, current_oi, prev_oi)
             prev_oi = current_oi
 
-            # Calculate Raw Targets
-            raw_tp = price * (1 + DEFAULT_TP)
-            raw_sl = price * (1 - DEFAULT_SL)
+            # Calculate Raw Targets (Base 50x settings)
+            base_tp = price * (1 + DEFAULT_TP)
+            base_sl = price * (1 - DEFAULT_SL)
 
-            # --- 2. HOURLY HEARTBEAT ALERT ---
+            # --- 2. ALWAYS-ON WALL VISION ---
+            # Force wall check every minute so Heartbeat targets are wall-adjusted
+            smart_tp, smart_sl = adjust_smart_targets("LONG", price, base_tp, base_sl)
+            raw_tp = smart_tp
+            raw_sl = smart_sl
+
+            # --- 3. HOURLY HEARTBEAT ALERT ---
             if (datetime.now() - last_alert).seconds > 3600:
                 await send_telegram_alert(
                     "DEGEN HEARTBEAT", price, raw_tp, raw_sl, "Hourly Heartbeat", 
@@ -311,7 +369,7 @@ async def main():
             reason = f"Slope: {slope:.4f} | Whales: {whale_ratio:.2f}"
             pending_info = None
 
-            # --- 3. POSITION MANAGEMENT & EVENT DRIVEN LEARNING ---
+            # --- 4. POSITION MANAGEMENT & EVENT DRIVEN LEARNING ---
             if is_in_position:
                 was_in_position = True
             
@@ -323,7 +381,7 @@ async def main():
                 last_learning = datetime.now()
                 was_in_position = False
 
-            # --- 4. STATUS FREEZE & INVALIDATION ---
+            # --- 5. STATUS FREEZE & INVALIDATION ---
             if status_freeze_until and datetime.now() < status_freeze_until:
                 decision = frozen_decision
                 reason = frozen_reason
@@ -344,9 +402,8 @@ async def main():
                 if is_invalid:
                     print(f"🚫 {invalid_reason}")
                     log_signal_to_history(f"CANCEL {active_signal_type}", price, 0, 0, current_win_prob, invalid_reason)
-                    
                     await send_telegram_alert(f"{active_signal_type} INVALIDATED", price, 0, 0, invalid_reason, slope, whale_ratio, fng, flow_state, current_win_prob)
-                    
+
                     status_freeze_until = datetime.now() + timedelta(minutes=15)
                     frozen_decision = "🚫 SIGNAL INVALIDATED"
                     frozen_reason = f"Reason: {invalid_reason}"
@@ -355,7 +412,7 @@ async def main():
                     decision = f"🚀 {active_signal_type} ACTIVE ({int(elapsed_mins)}m)"
                     reason = "Signal Valid. Waiting for Manual Entry."
 
-            # --- 5. SIGNAL SCAN ---
+            # --- 6. SIGNAL SCAN ---
             elif not is_in_position and not status_freeze_until:
                 trend_up = slope > 0.5
                 whale_buy = (whale_ratio > 1.2) and (fng < 40)
@@ -366,14 +423,15 @@ async def main():
 
                 if detected:
                     if current_win_prob > 25:
-                        smart_tp, smart_sl, adj_note = adjust_smart_targets(detected, price, raw_tp, raw_sl)
+                        # Use the Wall-Adjusted targets we calculated above
+                        signal_tp = smart_tp
+                        signal_sl = smart_sl
+                        
+                        adj_note = "Walls Respected"
 
                         if active_signal_type != detected:
                             active_signal_type = detected
                             signal_start_time = datetime.now()
-
-                        signal_tp = smart_tp
-                        signal_sl = smart_sl
 
                         decision = f"🚀 {detected} SIGNAL"
                         reason = f"High Velocity Setup + {adj_note}"
@@ -382,7 +440,7 @@ async def main():
                         
                         await send_telegram_alert(f"{detected} ETH", price, smart_tp, smart_sl, reason, slope, whale_ratio, fng, flow_state, current_win_prob)
 
-            # --- 6. SYNC DASHBOARD (HYPOTHETICAL TARGETS) ---
+            # --- 7. SYNC DASHBOARD (HYPOTHETICAL TARGETS) ---
             # Always show targets (Live or Hypothetical)
             display_sl = signal_sl if active_signal_type else raw_sl
             display_tp = signal_tp if active_signal_type else raw_tp
