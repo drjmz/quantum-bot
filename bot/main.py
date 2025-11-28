@@ -81,12 +81,30 @@ def calculate_fib_levels(closes):
 
 def adjust_smart_targets(signal_type, current_price, raw_tp, raw_sl):
     support_wall, resistance_wall = fetch_liquidity_walls()
+    
     final_tp = raw_tp
     final_sl = raw_sl
+    
     if "LONG" in signal_type:
-        if raw_tp > resistance_wall > current_price: final_tp = min(final_tp, resistance_wall * 0.999)
+        # 1. TP LOGIC: Front-run the Sell Wall (Sell before the crowd)
+        if raw_tp > resistance_wall > current_price: 
+            final_tp = min(final_tp, resistance_wall * 0.999)
+            
+        # 2. SL LOGIC: Hide behind the Buy Wall (Use wall as a shield)
+        # If the wall is between our Entry and our calculated SL, tighten the SL 
+        # to just below the wall.
+        if current_price > support_wall > raw_sl:
+            final_sl = max(final_sl, support_wall * 0.995) # 0.5% buffer below wall
+
     elif "SHORT" in signal_type:
-        if raw_tp < support_wall < current_price: final_tp = max(final_tp, support_wall * 1.001)
+        # 1. TP LOGIC: Front-run the Buy Wall (Buy back before the crowd)
+        if raw_tp < support_wall < current_price: 
+            final_tp = max(final_tp, support_wall * 1.001)
+            
+        # 2. SL LOGIC: Hide behind the Sell Wall
+        if current_price < resistance_wall < raw_sl:
+             final_sl = min(final_sl, resistance_wall * 1.005) # 0.5% buffer above wall
+
     return final_tp, final_sl
 
 def calculate_quantum_wave(closes):
