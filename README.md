@@ -2,7 +2,8 @@
 
 A high-frequency trading system comprising two distinct AI agents operating on the Base L2 network (Avantis Protocol).
 
-![Dashboard Preview](https://i.imgur.com/your_dashboard_image.png)
+![Dashboard Preview](https://imgur.com/a/ueLbOgm)
+*(Replace this link with a screenshot of your actual dashboard)*
 
 ## 🤖 The Twin Engines
 
@@ -24,34 +25,34 @@ A high-frequency trading system comprising two distinct AI agents operating on t
 
 ### 2. Setup
 Clone the repository and enter the directory:
+
 ```bash
-git clone [https://github.com/yourusername/quantum-bot.git](https://github.com/yourusername/quantum-bot.git)
+git clone https://github.com/drjmz/quantum-bot.git
 cd quantum-bot
-'''
+```
 
 Create your configuration file:
 
-'''Bash
-
+```bash
 cp .env.example .env
-Edit the .env file with your specific keys:
+```
 
-AVANTIS_PRIVATE_KEY: Your wallet private key.
+**Edit the `.env` file** with your specific keys:
+* `AVANTIS_PRIVATE_KEY`: Your wallet private key.
+* `TELEGRAM_TOKEN`: Your bot token from @BotFather.
+* `GOOGLE_API_KEY`: Your Gemini API key for AI analysis.
 
-TELEGRAM_TOKEN: Your bot token from @BotFather.
-
-GOOGLE_API_KEY: Your Gemini API key for AI analysis.
-
-3. Launch
+### 3. Launch
 Start the engines:
 
-'''Bash
-
+```bash
 docker-compose up --build -d
-4. Monitor
-Dashboard: Open http://localhost:8501 in your browser.
+```
 
-Logs: Run docker-compose logs -f to see the AI brain in action.
+### 4. Monitor
+* **Dashboard:** Open `http://localhost:8501` in your browser.
+* **Logs:** Run `docker-compose logs -f` to see the AI brain in action.
 
-⚠️ Disclaimer
-THIS SOFTWARE IS FOR EDUCATIONAL PURPOSES ONLY. Cryptocurrency trading, especially at 50x leverage, involves extreme risk. You can lose your entire balance in seconds. The developers are not responsible for financial losses. Use SIMULATION_MODE=True first.
+## ⚠️ Disclaimer
+**THIS SOFTWARE IS FOR EDUCATIONAL PURPOSES ONLY.**
+Cryptocurrency trading, especially at 50x leverage, involves extreme risk. You can lose your entire balance in seconds. The developers are not responsible for financial losses. **Use `SIMULATION_MODE=True` first.**
