@@ -1,0 +1,55 @@
+services:
+  # 1. The Dashboard (Monitors Both)
+  dashboard:
+    build: ./dashboard
+    container_name: quantum_dashboard
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+      - ./dashboard:/app
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"   # Rotate log after 10MB
+        max-file: "3"     # Keep only 3 old log files
+    env_file:
+      - .env
+    restart: unless-stopped
+
+  # 2. The Safe Bot (v9.1)
+  bot_safe:
+    build: ./bot
+    container_name: quantum_bot_safe
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - .env
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"   # Rotate log after 10MB
+        max-file: "3"     # Keep only 3 old log files
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+
+  # 3. The Degen Bot (50x)
+  bot_degen:
+    build: ./bot_degen
+    container_name: quantum_bot_degen
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - .env
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"   # Rotate log after 10MB
+        max-file: "3"     # Keep only 3 old log files
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Override log files so they don't overwrite each other
+      - STATE_FILE=data/degen_state.json
+      - SIGNAL_LOG_FILE=data/degen_signals.csv

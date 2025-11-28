@@ -1,0 +1,16 @@
+# Security: Ignore environment variables
+.env
+
+# Data: Ignore local logs and state files
+data/*.json
+data/*.csv
+data/*.pkl
+
+# Python: Ignore cache and environments
+__pycache__/
+*.pyc
+venv/
+.pytest_cache/
+
+# System
+.DS_Store
